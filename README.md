@@ -88,15 +88,17 @@ python run_amc.py --mods 2,4,16 --snr-start 0 --snr-stop 6 --snr-step 2 --bits 3
 - Adaptive modulation decision trace printed (if not `--quiet`)
 
 ## Theory Quick Reference
-For $E_b/N_0$ in dB: $E_b/N_0(\text{linear}) = 10^{\frac{E_b/N_0(\text{dB})}{10}}$
+Plain-text forms (GitHub-safe):
+
+Eb/N0 (linear) = 10^{ Eb/N0(dB) / 10 }
 
 BPSK / QPSK BER:
-$$P_b = Q\left(\sqrt{2 E_b/N_0}\right) = \tfrac{1}{2}\operatorname{erfc}\left(\sqrt{E_b/N_0}\right)$$
+P_b = Q( sqrt( 2 * Eb/N0 ) ) = 0.5 * erfc( sqrt( Eb/N0 ) )
 
 16-QAM (approx):
-$$P_b \approx \frac{1}{4}\left(3 Q\big(\sqrt{\tfrac{2}{5} E_b/N_0}\big) + Q\big(3\sqrt{\tfrac{2}{5} E_b/N_0}\big)\right)$$
+P_b ≈ (1/4) * [ 3 * Q( sqrt( (2/5) * Eb/N0 ) ) + Q( 3 * sqrt( (2/5) * Eb/N0 ) ) ]
 
-Where $Q(x) = \tfrac{1}{2}\operatorname{erfc}\left(\tfrac{x}{\sqrt{2}}\right)$.
+Q(x) = 0.5 * erfc( x / sqrt(2) )
 
 ## Statistical Notes
 - Low BER (< 1e-5) requires many bits for stable estimates
@@ -181,4 +183,3 @@ See the [`LICENSE`](./LICENSE) file for full text.
 
 
 ---
-Enjoy hacking the air interface. Open an issue / add Darshan's handle later.

@@ -53,6 +53,7 @@ Thumbs.db
 *.bak
 *.orig
 *.tmp
+Makefile.full_backup
 
 # Log files
 *.log
