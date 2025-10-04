@@ -1,0 +1,4 @@
+## Original full-feature Makefile backup
+## (Automatically created before simplification)
+
+$(shell sed 's/.*/&/' Makefile)

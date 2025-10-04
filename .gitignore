@@ -1,0 +1,79 @@
+# Build artifacts and object files
+*.o
+*.d
+*.so
+*.a
+*.lib
+*.dll
+*.dylib
+
+# Executable files
+ber_test
+test_main
+*_test
+
+# Compilation databases and build systems
+compile_commands.json
+.cache/
+build/
+dist/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+.env
+
+# Simulation outputs
+*.csv
+*.png
+*.pdf
+*.svg
+results_*
+ber_*
+output_*
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.backup
+*.bak
+*.orig
+*.tmp
+
+# Log files
+*.log
+*.out
+
+# Core dumps
+core
+core.*
+
+# OS generated files
+.directory
+*.lnk
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pytest
+.pytest_cache/
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
