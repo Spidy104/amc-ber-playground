@@ -7,6 +7,7 @@
 ## Overview
 
 This mini project lets you:
+
 - **Simulate Bit Error Rate (BER)** for BPSK, QPSK, and 16-QAM over AWGN channels
 - **Compare simulated vs theoretical** performance curves
 - **Generate CSV data** + publication-style plots
@@ -20,21 +21,23 @@ Everything is intentionally minimal: one C++ source file (`ber.cpp`), one Python
 ## Key Features
 
 - **High-speed C++20 BER engine** (BPSK/QPSK/16-QAM)
+- **Convolutional Coding (K=7, Rate 1/2)** with soft-decision Viterbi decoder (BPSK coded path)
 - **Deterministic seeded BER function** (if compiled with `compute_ber_seeded`)
 - **On-the-fly SNR estimation** using pilot symbols
 - **Theoretical overlays**: BPSK/QPSK and 16-QAM approximations
 - **Multiple run modes**: quick/no output, CSV only, plots, or full export
--  *Clean separation** between simulation core and Python presentation layer
+- **Clean separation** between simulation core and Python presentation layer
 
 ---
 
 ## Project Structure
 
-```
+```text
 .
 ├── ber.cpp                 # C++ modulation/demod + BER + tests + SNR estimation
 ├── run_amc.py              # Python CLI for sweeping SNR and plotting/exporting
 ├── test_amc.py             # Benchmarking script
+├── coding.cpp / coding.h   # Convolutional encoder + Viterbi decoder (K=7, R=1/2)
 ├── Makefile                # Minimal build + run targets
 ├── Makefile.full_backup    # Original extended build (kept for reference)
 ├── requirements.txt        # Python dependencies (numpy, matplotlib, scipy, etc.)
@@ -49,10 +52,12 @@ Everything is intentionally minimal: one C++ source file (`ber.cpp`), one Python
 ## Dependencies
 
 ### C++
+
 - **g++** with C++20 support (`-std=c++20`)
 - Standard library with `<random>`, `<complex>`, `<cmath>`
 
 ### Python
+
 Install dependencies (prefer virtualenv):
 
 ```bash
@@ -62,6 +67,7 @@ pip install -r requirements.txt
 ```
 
 **Required packages:**
+
 - `numpy` - Numerical computing
 - `matplotlib` - Plotting and visualization
 - `scipy` - Special functions (erfc, Q-function)
@@ -73,22 +79,26 @@ pip install -r requirements.txt
 
 ## Build & Test
 
-### Build C++ test binary:
+### Build C++ test binary
+
 ```bash
 make
 ```
 
-### Run C++ tests (mod/demod, BER accuracy, SNR estimation):
+### Run C++ tests (mod/demod, BER accuracy, SNR estimation)
+
 ```bash
 make test
 ```
 
-### Build shared library for Python:
+### Build shared library for Python
+
 ```bash
 make shared
 ```
 
-### Clean artifacts:
+### Clean artifacts
+
 ```bash
 make clean
 ```
@@ -97,13 +107,17 @@ make clean
 
 ## ▶Run Modes (Make Targets)
 
-| Target           | What it does                                        |
-|------------------|-----------------------------------------------------|
-| `make run`       | Quick simulation (no plots / CSV)                   |
-| `make run-csv`   | Generates `results.csv`                            |
-| `make run-plot`  | Interactive BER + SNR plots                        |
-| `make run-full`  | CSV + saved plots (`ber_ber.png`, `ber_snr.png`)  |
-| `make bench`     | Performance benchmark of BER kernel                |
+| Target                | What it does                                                                 |
+|-----------------------|--------------------------------------------------------------------------------|
+| `make run`            | Quick simulation (no plots / CSV)                                                |
+| `make run-csv`        | Generates `results.csv`                                                           |
+| `make run-plot`       | Interactive BER + SNR plots                                                       |
+| `make run-full`       | CSV + saved plots (`ber_ber.png`, `ber_snr.png`)                                  |
+| `make run-deep`       | Deeper BER probing (uses `DEEP_BITS`)                                             |
+| `make run-ultra`      | Ultra-deep BER probing (uses `ULTRA_BITS`)                                        |
+| `make run-coded`      | Coded + uncoded BER curves (BPSK coded path)                                      |
+| `make run-coded-only` | Only coded BER curve (suppresses uncoded)                                         |
+| `make bench`          | Performance benchmark of BER kernel (uncoded)                                     |
 
 ---
 
@@ -112,18 +126,145 @@ make clean
 After `make shared`:
 
 **Full featured run:**
+
 ```bash
 python run_amc.py --mods 2,4,16 --snr-start 0 --snr-stop 10 --snr-step 1 \
                   --bits 80000 --runs 2 --csv results.csv --save-prefix ber
 ```
 
 **Minimal fast run (no plots):**
+
 ```bash
 python run_amc.py --mods 2,4,16 --snr-start 0 --snr-stop 6 --snr-step 2 \
                   --bits 30000 --runs 1 --no-plot
 ```
 
 **High-precision deep BER:**
+**Coded BER comparison (BPSK/QPSK/16-QAM; coded path currently BPSK-only):**
+
+```bash
+python run_amc.py --mods 2,4,16 --snr-start 0 --snr-stop 14 --snr-step 1 \
+                  --bits 1000000 --runs 1 --coding --save-prefix coded
+```
+
+**Coded only (omit uncoded curve):**
+
+```bash
+python run_amc.py --mods 2 --snr-start 0 --snr-stop 10 --snr-step 1 \
+                  --bits 2000000 --coding --coded-only --save-prefix bpsk_coded
+```
+
+---
+
+## Convolutional Coding (K=7, Rate 1/2)
+
+Added a classic industry-standard code (constraint length 7, generators 133/171 in octal). Highlights:
+
+- Tail-bit termination (6 flush bits) ensures deterministic trellis termination
+- Soft-decision log-domain Viterbi metrics
+- BPSK, QPSK, and 16-QAM coded channels now supported (16-QAM uses 4 bit Gray 4-PAM per I/Q)
+- Internal LLR sign inverted to match branch metric polarity
+
+### Eb/N0 vs Es/N0 under Coding
+
+For rate R=1/2:
+
+$$\frac{E_s}{N_0} = R \cdot \frac{E_b}{N_0}$$
+
+Noise variance is scaled accordingly inside the coded BER function so input Eb/N0 remains the comparison axis.
+
+### Zero-Error Handling
+
+When no bit errors are observed at an SNR point, an upper bound is logged instead of zero:
+
+$$\text{BER}_{upper} = \frac{0.5}{N_{bits}}$$
+
+This keeps log plots finite while acknowledging statistical limits.
+
+### Interpreting the Waterfall
+
+- Expect ~5–6 dB coding gain around BER 10⁻³–10⁻⁴ versus uncoded BPSK
+- Flat segments at very low BER usually indicate you hit the statistical floor (increase bits)
+- Future extensions: puncturing (2/3, 3/4) or alternate FEC (LDPC, Polar)
+
+#### 16-QAM Specific Notes
+
+- Coded 16-QAM uses per-dimension log-sum-exp LLRs (exact over the 4-PAM Gray set)
+- At very low SNR (< ~2 dB) the code may appear worse due to heavy symbol ambiguity; gain emerges as BER drops below ~3e-2
+- If coded and uncoded 16-QAM collapse together at mid/high SNR, increase bits (`--bits` or deep targets) so post-decoder errors remain observable
+
+---
+
+## Makefile Configuration Knobs
+
+Override any variable inline (e.g. `make run-coded BITS=4000000 SNR_STOP=14`).
+
+| Variable      | Purpose                                | Example Default |
+|---------------|-----------------------------------------|-----------------|
+| `BITS`        | Bits per SNR point (standard)           | 1000000         |
+| `DEEP_BITS`   | Bits per point in `run-deep`            | 20000000        |
+| `ULTRA_BITS`  | Bits per point in `run-ultra`           | 50000000        |
+| `RUNS`        | Monte Carlo repeats                     | 1               |
+| `DEEP_RUNS`   | Repeats in deep mode                    | 2               |
+| `ULTRA_RUNS`  | Repeats in ultra mode                   | 3               |
+| `SNR_START`   | Start Eb/N0 dB                         | 0               |
+| `SNR_STOP`    | Stop Eb/N0 dB (standard/coded)          | 12              |
+| `DEEP_STOP`   | Stop Eb/N0 dB (deep)                    | 18              |
+| `ULTRA_STOP`  | Stop Eb/N0 dB (ultra)                   | 20              |
+
+Examples:
+
+```bash
+make run-coded BITS=4000000 SNR_STOP=14
+make run-deep DEEP_BITS=30000000 DEEP_STOP=20
+```
+
+---
+
+## Enhanced Benchmarking (Adaptive + Coded)
+
+`test_amc.py` adds richer benchmarking controls:
+
+- `--bench-coded`           Include coded BER column (BPSK only)
+- `--bench-adaptive`        Keep accumulating blocks until stop criteria
+- `--bench-min-errors N`    Minimum observed uncoded errors (adaptive)
+- `--bench-max-bits N`      Hard cap on accumulated bits
+
+Adaptive mode is useful when targeting a relative confidence rather than fixed bit counts.
+
+Example (adaptive coded benchmark at 8 dB):
+
+```bash
+python test_amc.py --bench --bench-mod 2 --bench-snr 8 \
+                   --bench-coded --bench-adaptive \
+                   --bench-min-errors 300 --bench-max-bits 8000000
+```
+
+Columns:
+
+| Column            | Meaning                                           |
+|-------------------|----------------------------------------------------|
+| bits              | Cumulative simulated bits (adaptive grows)         |
+| ber_uncoded       | Uncoded BER estimate                               |
+| ber_coded         | Coded BER (or upper bound if zero errors)          |
+| time_ms           | Wall clock time for latest added chunk             |
+| throughput_Mb_s   | Effective Monte Carlo throughput                   |
+| scale             | Bits growth factor vs previous row                 |
+
+---
+
+## Interpreting Very Low BER Segments
+
+If coded BER flattens identically across multiple SNR points:
+
+1. Statistical floor reached (increase `--bits` or use deep/ultra targets)
+2. Waterfall transitioning toward an intrinsic error floor
+3. Not (yet) supported modulation (currently only BPSK coded path)
+
+Rule of thumb: For a target BER p, simulate at least 100/p bits for a reasonably tight estimate.
+
+---
+
 ```bash
 python run_amc.py --mods 2,4 --snr-start 0 --snr-stop 12 --snr-step 0.5 \
                   --bits 5000000 --runs 3 --csv deep_ber.csv --save-prefix deep
@@ -140,7 +281,7 @@ python run_amc.py --mods 2,4 --snr-start 0 --snr-stop 12 --snr-step 0.5 \
 
 ---
 
-##  Theory & Mathematical Background
+## Theory & Mathematical Background
 
 ### Digital Modulation Fundamentals
 
@@ -153,6 +294,7 @@ The **Additive White Gaussian Noise (AWGN)** channel model:
 $$r = s + n$$
 
 Where:
+
 - $r$ = received signal
 - $s$ = transmitted symbol
 - $n \sim \mathcal{CN}(0, N_0/2)$ = complex Gaussian noise with power spectral density $N_0/2$ per dimension
@@ -164,6 +306,7 @@ The signal-to-noise ratio per bit:
 $$\frac{E_b}{N_0} = 10^{\left(\frac{E_b/N_0 \text{ (dB)}}{10}\right)}$$
 
 Where:
+
 - $E_b$ = energy per bit
 - $N_0$ = noise power spectral density
 
@@ -185,6 +328,7 @@ Where $E_s$ is the energy per symbol.
 $$P_b = Q\left(\sqrt{2 \cdot \frac{E_b}{N_0}}\right) = \frac{1}{2}\text{erfc}\left(\sqrt{\frac{E_b}{N_0}}\right)$$
 
 Where:
+
 - $Q(x) = \frac{1}{2}\text{erfc}\left(\frac{x}{\sqrt{2}}\right)$ is the Q-function (tail probability of standard normal)
 - $\text{erfc}(x) = \frac{2}{\sqrt{\pi}}\int_x^\infty e^{-t^2}dt$ is the complementary error function
 
@@ -230,11 +374,11 @@ Where $E_s = 4E_b$ for 16-QAM.
 
 ### Performance Comparison
 
-| Modulation | Bits/Symbol | Relative SNR (dB) for BER=10⁻³ | Spectral Efficiency |
+| Modulation | Bits/Symbol | Relative SNR (dB) for BER=10⁻⁶ | Spectral Efficiency |
 |------------|-------------|--------------------------------|---------------------|
-| BPSK       | 1           | ~6.8 dB                        | 1 bit/s/Hz          |
-| QPSK       | 2           | ~6.8 dB                        | 2 bit/s/Hz          |
-| 16-QAM     | 4           | ~10.5 dB                       | 4 bit/s/Hz          |
+| BPSK       | 1           | ~10.5 dB                       | 1 bit/s/Hz          |
+| QPSK       | 2           | ~10.5 dB                       | 2 bit/s/Hz          |
+| 16-QAM     | 4           | ~14.5 dB                       | 4 bit/s/Hz          |
 
 **Key insight:** Higher-order modulation trades power efficiency for spectral efficiency.
 
@@ -247,6 +391,7 @@ The simulator estimates SNR using known pilot symbols:
 $$\hat{\gamma} = \frac{\mathbb{E}[|s|^2]}{\mathbb{E}[|r - s|^2]}$$
 
 Where:
+
 - $s$ = known transmitted pilot
 - $r$ = received pilot
 - $|r - s|^2$ estimates noise variance
@@ -273,6 +418,7 @@ This enables **adaptive modulation**: switching between BPSK/QPSK/16-QAM based o
 | 10⁻⁵ | 10,000,000 | ~100 seconds |
 
 **Tips:**
+
 - Use `--runs > 1` to average out Monte Carlo noise
 - Increase `--bits` for deeper BER regions
 - Threshold adaptation example uses estimated SNR vs true SNR trace
@@ -282,7 +428,7 @@ This enables **adaptive modulation**: switching between BPSK/QPSK/16-QAM based o
 
 ## CLI Options
 
-```
+```text
 --mods 2,4,16              Modulation orders to simulate (2=BPSK, 4=QPSK, 16=16QAM)
 --snr-start FLOAT          Starting Eb/N0 in dB (default: 0)
 --snr-stop FLOAT           Ending Eb/N0 in dB (default: 10)
@@ -298,7 +444,13 @@ This enables **adaptive modulation**: switching between BPSK/QPSK/16-QAM based o
 --bench-mod INT            Modulation for benchmark (default: 2)
 --bench-snr FLOAT          SNR for benchmark (default: 6.0)
 --bench-sizes LIST         Bit sizes for benchmark (comma-separated)
-```
+--coding                   Enable convolutional coding (BPSK coded path)
+--coded-only               Plot only coded curve (omit uncoded)
+--bench-coded              Include coded BER in benchmark (BPSK only)
+--bench-adaptive           Adaptive accumulation benchmark mode
+--bench-min-errors INT     Min uncoded errors before stopping adaptive run
+--bench-max-bits INT       Max bits before adaptive run stops
+```text
 
 Run `python run_amc.py -h` for full list.
 
@@ -313,6 +465,7 @@ make bench
 ```
 
 **Sample output (BPSK @ 6 dB):**
+
 ```
 AMC BER Benchmark
 =================
@@ -326,6 +479,7 @@ Modulation: 2, SNR=6.0 dB
 ```
 
 **Interpretation:**
+
 - **bits**: Number of simulated bits in Monte Carlo kernel
 - **ber**: Measured BER at that SNR (statistical noise expected for small sizes)
 - **time(ms)**: Wall-clock time for that call
@@ -333,6 +487,7 @@ Modulation: 2, SNR=6.0 dB
 - **scale**: Growth factor relative to previous size
 
 **Custom benchmarks:**
+
 ```bash
 python test_amc.py --bench --bench-mod 16 --bench-snr 8 --bench-sizes 10000,40000,160000
 ```
@@ -355,6 +510,7 @@ python test_amc.py --bench --bench-mod 16 --bench-snr 8 --bench-sizes 10000,4000
 ## Possible Enhancements
 
 ### Short-term
+
 - [ ] Add 64-QAM / 256-QAM modulation schemes
 - [ ] Constellation diagram plotting with decision boundaries
 - [ ] Parallel SNR sweep using Python multiprocessing
@@ -364,25 +520,29 @@ python test_amc.py --bench --bench-mod 16 --bench-snr 8 --bench-sizes 10000,4000
 
 ## Example Workflows
 
-### Quick exploration (fast):
+### Quick exploration (fast)
+
 ```bash
 make run
 ```
 
-### Generate publication plot:
+### Generate publication plot
+
 ```bash
 python run_amc.py --mods 2,4,16 --snr-start 0 --snr-stop 12 --snr-step 0.5 \
                   --bits 1000000 --runs 5 --csv paper_results.csv \
                   --save-prefix paper --quiet
 ```
 
-### Compare theory vs simulation:
+### Compare theory vs simulation
+
 ```bash
 python run_amc.py --mods 2 --snr-start 0 --snr-stop 10 --snr-step 0.5 \
                   --bits 500000 --runs 3 --save-prefix bpsk_validation
 ```
 
-### Benchmark performance:
+### Benchmark performance
+
 ```bash
 make bench
 # Or custom:
@@ -406,23 +566,6 @@ python test_amc.py --bench --bench-mod 4 --bench-snr 8 --bench-sizes 50000,20000
 This project is licensed under the **MIT License**.
 
 See the [`LICENSE`](./LICENSE) file for full text.
-
----
-
-## References
-
-### Books
-- Proakis & Salehi, *Digital Communications* (5th Ed.)
-- Goldsmith, *Wireless Communications*
-- Sklar, *Digital Communications: Fundamentals and Applications*
-
-### Standards
-- IEEE 802.11 (WiFi) - Adaptive modulation in OFDM
-- 3GPP LTE/5G - Link adaptation specifications
-
-### Online Resources
-- [Wireless Pi - BER Curves](https://wirelesspi.com/)
-- [CommPy - Digital Communications in Python](https://github.com/veeresht/CommPy)
 
 ---
 

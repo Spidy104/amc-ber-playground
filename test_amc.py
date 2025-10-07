@@ -18,6 +18,14 @@ lib.compute_ber.restype = ctypes.c_double
 lib.estimate_snr.argtypes = [ctypes.c_double, ctypes.c_longlong]
 lib.estimate_snr.restype = ctypes.c_double
 
+# Coding function signatures
+lib.compute_ber_coded.argtypes = [ctypes.c_int, ctypes.c_double, ctypes.c_longlong, ctypes.c_int]
+lib.compute_ber_coded.restype = ctypes.c_double
+lib.test_convolutional_coding.argtypes = []
+lib.test_convolutional_coding.restype = ctypes.c_int
+lib.estimate_coding_gain_db.argtypes = []
+lib.estimate_coding_gain_db.restype = ctypes.c_double
+
 # Test function signatures (corrected)
 lib.run_mod_demod_test.argtypes = [ctypes.c_char_p]
 lib.run_mod_demod_test.restype = ctypes.c_int
@@ -217,34 +225,319 @@ class TestAMC(unittest.TestCase):
                 ratio = max(ber_bpsk, ber_qpsk) / min(ber_bpsk, ber_qpsk)
                 self.assertLess(ratio, 2.5, f"BPSK vs QPSK BER diverged too much at {snr} dB (ratio={ratio:.2f})")
 
+    # ========================================================================
+    # CODING TESTS
+    # ========================================================================
+    
+    def test_convolutional_coding_self_test(self):
+        """Test the built-in convolutional coding self-test"""
+        result = lib.test_convolutional_coding()
+        self.assertEqual(result, 0, f"Convolutional coding self-test failed with code: {result}")
+        print("✅ Convolutional coding self-test passed")
+        
+    def test_coding_gain_estimate(self):
+        """Test coding gain estimation function"""
+        gain_db = lib.estimate_coding_gain_db()
+        self.assertGreater(gain_db, 0, "Coding gain should be positive")
+        self.assertLess(gain_db, 15, "Coding gain should be reasonable (<15 dB)")
+        print(f"📊 Estimated coding gain: {gain_db:.1f} dB")
+        
+    def test_coded_ber_function_availability(self):
+        """Test that coded BER function is available and callable"""
+        try:
+            # Test with minimal parameters (should not crash)
+            result = lib.compute_ber_coded(2, 10.0, 1000, 1)
+            self.assertIsInstance(result, float, "compute_ber_coded should return a float")
+            print(f"📡 compute_ber_coded callable, returned: {result}")
+        except Exception as e:
+            self.fail(f"compute_ber_coded function call failed: {e}")
+            
+    def test_coding_vs_uncoded_basic(self):
+        """Basic test comparing coded vs uncoded BER"""
+        snr_db = 6.0
+        bits = 50000
+        
+        print(f"\n🧪 Testing BPSK at {snr_db} dB SNR with {bits} bits...")
+        
+        # Get uncoded BER
+        uncoded_ber = lib.compute_ber(2, snr_db, bits)
+        self.assertGreaterEqual(uncoded_ber, 0, "Uncoded BER should be non-negative")
+        self.assertLess(uncoded_ber, 1.0, "Uncoded BER should be < 1.0")
+        
+        # Get coded BER  
+        coded_ber = lib.compute_ber_coded(2, snr_db, bits, 1)
+        print(f"  Uncoded BER: {uncoded_ber:.4e}")
+        print(f"  Coded BER:   {coded_ber:.4e}")
+        
+        # Basic sanity checks
+        if coded_ber >= 1.0:
+            print("  ❌ ERROR: Coded BER indicates failure (>=1.0)")
+            print("  🔍 This suggests an issue in the coding implementation")
+            self.fail("Coded BER function returned error code (>=1.0)")
+        elif coded_ber < 0:
+            print("  ❌ ERROR: Coded BER is negative")
+            self.fail("Coded BER should not be negative")
+        elif coded_ber == 0:
+            print("  ⚠️  WARNING: Coded BER is exactly zero (may be below detection threshold)")
+        else:
+            # Valid coded BER - check if it shows improvement
+            improvement = uncoded_ber / coded_ber if coded_ber > 0 else float('inf')
+            gain_db = 10 * np.log10(improvement) if improvement > 1 else 0
+            print(f"  📈 Improvement: {improvement:.1f}x ({gain_db:.1f} dB gain)")
+            
+            if improvement > 1.5:  # Expect at least some coding gain
+                print("  ✅ Coding shows improvement!")
+            else:
+                print("  ⚠️  Limited or no coding gain observed")
+                
+    def test_coding_with_different_modulations(self):
+        """Test coding behavior with different modulation schemes"""
+        modulations = [2, 4, 16]
+        snr_db = 8.0
+        bits = 30000
+        
+        print(f"\n🔄 Testing coding with different modulations at {snr_db} dB...")
+        
+        for mod in modulations:
+            mod_name = {2: 'BPSK', 4: 'QPSK', 16: '16-QAM'}[mod]
+            
+            uncoded_ber = lib.compute_ber(mod, snr_db, bits)
+            coded_ber = lib.compute_ber_coded(mod, snr_db, bits, 1)
+            
+            print(f"  {mod_name:6s}: Uncoded={uncoded_ber:.3e}, Coded={coded_ber:.3e}")
+            
+            # Check behavior
+            if mod == 2:  # BPSK should support coding
+                if coded_ber >= 1.0:
+                    print(f"    ❌ {mod_name}: Coding failed")
+                elif coded_ber < uncoded_ber:
+                    print(f"    ✅ {mod_name}: Coding provides gain")
+                else:
+                    print(f"    ⚠️  {mod_name}: No coding gain observed")
+            else:  # Non-BPSK should fall back to uncoded
+                if abs(coded_ber - uncoded_ber) < 1e-6:
+                    print(f"    ✅ {mod_name}: Correctly falls back to uncoded")
+                else:
+                    print(f"    ⚠️  {mod_name}: Unexpected behavior (should fall back)")
+                    
+    def test_coding_snr_sweep(self):
+        """Test coding performance across different SNR values"""
+        snr_values = [2.0, 4.0, 6.0, 8.0, 10.0]
+        bits = 20000
+        
+        print(f"\n📈 SNR sweep for BPSK coding ({bits} bits per point)...")
+        print("   SNR    Uncoded      Coded       Gain")
+        print("  ----   ---------   ---------   ------")
+        
+        valid_tests = 0
+        total_gain = 0.0
+        
+        for snr in snr_values:
+            uncoded = lib.compute_ber(2, snr, bits)
+            coded = lib.compute_ber_coded(2, snr, bits, 1)
+            
+            if coded >= 1.0:
+                gain_str = "ERROR"
+            elif coded == 0:
+                gain_str = "FLOOR"
+            elif uncoded > 0 and coded > 0:
+                gain_db = 10 * np.log10(uncoded / coded)
+                gain_str = f"{gain_db:5.1f}dB"
+                if gain_db > 0:
+                    total_gain += gain_db
+                    valid_tests += 1
+            else:
+                gain_str = "N/A"
+                
+            print(f"  {snr:4.1f}   {uncoded:8.2e}   {coded:8.2e}   {gain_str}")
+            
+        if valid_tests > 0:
+            avg_gain = total_gain / valid_tests
+            print(f"\n  📊 Average coding gain: {avg_gain:.1f} dB ({valid_tests}/{len(snr_values)} valid tests)")
+            
+            # Expect reasonable coding gain
+            if avg_gain > 3.0:  # Expect at least 3 dB average gain
+                print("  ✅ Reasonable coding gain achieved")
+            else:
+                print("  ⚠️  Lower than expected coding gain")
+        else:
+            print("  ❌ No valid coding gain measurements")
+            self.fail("No valid coding tests completed")
+            
+    def test_coding_error_conditions(self):
+        """Test coding function with invalid inputs"""
+        print("\n🚨 Testing error conditions...")
+        
+        # Invalid modulation order
+        result = lib.compute_ber_coded(8, 10.0, 10000, 1)  # Invalid mod order
+        self.assertEqual(result, -1.0, "Should return -1.0 for invalid modulation")
+        print("  ✅ Invalid modulation order handled correctly")
+        
+        # Invalid SNR
+        result = lib.compute_ber_coded(2, -100.0, 10000, 1)  # Invalid SNR
+        self.assertEqual(result, -1.0, "Should return -1.0 for invalid SNR")
+        print("  ✅ Invalid SNR handled correctly")
+        
+        # Zero bits
+        result = lib.compute_ber_coded(2, 10.0, 0, 1)  # Zero bits
+        self.assertEqual(result, 0.0, "Should return 0.0 for zero bits")
+        print("  ✅ Zero bits handled correctly")
+        
+        # Coding disabled (should match uncoded)
+        uncoded = lib.compute_ber(2, 8.0, 20000)
+        coded_off = lib.compute_ber_coded(2, 8.0, 20000, 0)  # Coding disabled
+        self.assertAlmostEqual(coded_off, uncoded, places=10, msg="Coded with coding=0 should match uncoded")
+        print("  ✅ Coding disabled mode works correctly")
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='AMC BER tests / benchmark')
     parser.add_argument('--bench', action='store_true', help='Run benchmark instead of unit tests')
-    parser.add_argument('--bench-snr', type=float, default=6.0, help='SNR (dB) for benchmark BPSK run')
-    parser.add_argument('--bench-mod', type=int, default=2, help='Modulation order to benchmark (2,4,16)')
-    parser.add_argument('--bench-sizes', type=str, default='5000,20000,80000,320000', help='Comma list of bit sizes')
+    parser.add_argument('--bench-snr', type=float, default=6.0, help='SNR (dB) for benchmark run')
+    parser.add_argument('--bench-mod', type=int, default=None, help='(Deprecated) Single modulation order to benchmark')
+    parser.add_argument('--bench-mods', type=str, default='2,4,16', help='Comma list of modulation orders to benchmark')
+    parser.add_argument('--bench-sizes', type=str, default='5000,20000,80000,320000', help='Comma list of bit sizes (ignored if adaptive)')
+    parser.add_argument('--bench-coded', action='store_true', help='Include coded BER in benchmark (now supports 2,4,16)')
+    parser.add_argument('--bench-adaptive', action='store_true', help='Adaptively increase bits until min errors reached')
+    parser.add_argument('--bench-min-errors', type=int, default=100, help='Minimum target bit errors for BER stability (adaptive mode)')
+    parser.add_argument('--bench-max-bits', type=int, default=10_000_000, help='Maximum bits to use in adaptive mode')
+    parser.add_argument('--bench-gain', action='store_true', help='Compute coding gain (dB) when coded BER > 0')
+    parser.add_argument('--bench-csv', type=str, default=None, help='Optional CSV output for benchmark results')
     args, remaining = parser.parse_known_args()
 
     if args.bench:
-        if args.bench_mod not in (2,4,16):
-            print('Invalid modulation order for benchmark. Use 2,4, or 16.')
-            raise SystemExit(1)
-        sizes = [int(s) for s in args.bench_sizes.split(',') if s.strip()]
-        print('AMC BER Benchmark')
-        print('=================')
-        print(f'Modulation: {args.bench_mod}, SNR={args.bench_snr} dB')
-        header = f"{'bits':>10}  {'ber':>10}  {'time(ms)':>9}  {'throughput(Mbit/s)':>19}  scale"
-        print(header)  
-        print('-'*len(header))
-        last = None
-        for n in sizes:
+        # Determine mod list
+        if args.bench_mod is not None:
+            mods = [args.bench_mod]
+        else:
+            mods = [int(m) for m in args.bench_mods.split(',') if m.strip()]
+        for m in mods:
+            if m not in (2,4,16):
+                print(f"Invalid modulation order {m}. Use 2,4,16.")
+                raise SystemExit(1)
+
+        print('AMC BER Benchmark (Multi-Mod)')
+        print('=============================')
+        print(f'SNR={args.bench_snr} dB')
+        if args.bench_adaptive:
+            print(f"Adaptive mode: min_errors={args.bench_min_errors}, max_bits={args.bench_max_bits}")
+        if args.bench_coded:
+            print('Including coded BER columns')
+        if args.bench_gain:
+            print('Coding gain computation enabled')
+
+        # Prepare CSV if needed
+        csv_rows = []
+        if args.bench_csv:
+            header = ['mod','bits','ber_uncoded']
+            if args.bench_coded:
+                header.append('ber_coded')
+            if args.bench_gain:
+                header.append('gain_db')
+            header += ['time_ms','throughput_Mb_s']
+            csv_rows.append(header)
+
+        def run_once(mod, n_bits):
             t0 = time.perf_counter()
-            ber = lib.compute_ber(args.bench_mod, args.bench_snr, n)
+            ber_u = lib.compute_ber(mod, args.bench_snr, n_bits)
+            ber_c = None
+            if args.bench_coded:
+                ber_c = lib.compute_ber_coded(mod, args.bench_snr, n_bits, 1234)
             dt_ms = (time.perf_counter() - t0) * 1000.0
-            rate = n / (dt_ms/1000.0) / 1e6
-            scale = f"x{n/last:.1f}" if last else '--'
-            print(f"{n:10d}  {ber:10.2e}  {dt_ms:9.2f}  {rate:19.2f}  {scale}")
-            last = n
+            thr = n_bits / (dt_ms/1000.0) / 1e6
+            return ber_u, ber_c, dt_ms, thr
+
+        # Print header
+        base_cols = ['mod','bits','ber_uncoded']
+        if args.bench_coded:
+            base_cols.append('ber_coded')
+        if args.bench_gain:
+            base_cols.append('gain_db')
+        base_cols += ['time_ms','throughput_Mb_s','scale'] if not args.bench_adaptive else ['time_ms','throughput_Mb_s']
+        header_line = '  '.join(f"{c:>12}" for c in base_cols)
+        print(header_line)
+        print('-'*len(header_line))
+
+        for mod in mods:
+            last_bits = None
+            if args.bench_adaptive:
+                guess = 5000
+                total_bits = 0
+                total_errors = 0
+                step_scale = 2.5
+                while total_bits < args.bench_max_bits and total_errors < args.bench_min_errors:
+                    ber_u, ber_c, dt_ms, thr = run_once(mod, guess)
+                    est_errors = max(1, int(ber_u * guess))
+                    total_bits += guess
+                    total_errors += est_errors
+                    gain_db = ''
+                    ber_c_display = ''
+                    if args.bench_coded:
+                        if ber_c is not None:
+                            if ber_c == 0.0:
+                                ber_c_display = f"{0.5/guess:.2e}"
+                            else:
+                                ber_c_display = f"{ber_c:.2e}"
+                            if args.bench_gain and ber_c > 0 and ber_u > 0:
+                                gain_db = f"{10*np.log10(ber_u/ber_c):.2f}"
+                    row_print = [f"{mod:12d}", f"{total_bits:12d}", f"{ber_u:12.2e}"]
+                    if args.bench_coded:
+                        row_print.append(f"{ber_c_display:>12}")
+                    if args.bench_gain:
+                        row_print.append(f"{gain_db:>12}")
+                    row_print += [f"{dt_ms:12.2f}", f"{thr:12.2f}"]
+                    print('  '.join(row_print))
+                    if args.bench_csv:
+                        csv_row = [mod, total_bits, ber_u]
+                        if args.bench_coded:
+                            csv_row.append(0.5/guess if ber_c == 0.0 else ber_c)
+                        if args.bench_gain and gain_db:
+                            csv_row.append(float(gain_db))
+                        elif args.bench_gain:
+                            csv_row.append('')
+                        csv_row += [dt_ms, thr]
+                        csv_rows.append(csv_row)
+                    if est_errors < 5:
+                        guess = int(guess * step_scale)
+                    else:
+                        guess = int(guess * 1.5)
+                print(f"--> Mod {mod}: stopping total_bits={total_bits}, est_errors≈{total_errors}")
+            else:
+                sizes = [int(s) for s in args.bench_sizes.split(',') if s.strip()]
+                for n in sizes:
+                    ber_u, ber_c, dt_ms, thr = run_once(mod, n)
+                    ber_c_display = None
+                    if args.bench_coded:
+                        if ber_c is not None and ber_c == 0.0:
+                            ber_c_display = 0.5 / n
+                        else:
+                            ber_c_display = ber_c
+                    gain_db = ''
+                    if (args.bench_gain and args.bench_coded and isinstance(ber_c_display,(int,float))
+                        and ber_c_display > 0 and ber_u > 0):
+                        gain_db = 10*np.log10(ber_u / ber_c_display)
+                    row_print = [f"{mod:12d}", f"{n:12d}", f"{ber_u:12.2e}"]
+                    if args.bench_coded:
+                        row_print.append(f"{ber_c_display:12.2e}")
+                    if args.bench_gain:
+                        row_print.append(f"{gain_db:12.2f}" if gain_db != '' else f"{'':>12}")
+                    scale = f"x{n/last_bits:.1f}" if last_bits else '   --'
+                    row_print += [f"{dt_ms:12.2f}", f"{thr:12.2f}", f"{scale:>12}"]
+                    print('  '.join(row_print))
+                    if args.bench_csv:
+                        csv_row = [mod, n, ber_u]
+                        if args.bench_coded:
+                            csv_row.append(ber_c_display)
+                        if args.bench_gain:
+                            csv_row.append(gain_db if gain_db != '' else '')
+                        csv_row += [dt_ms, thr]
+                        csv_rows.append(csv_row)
+                    last_bits = n
+        if args.bench_csv:
+            import csv
+            with open(args.bench_csv,'w',newline='') as f:
+                writer = csv.writer(f)
+                writer.writerows(csv_rows)
+            print(f"CSV written: {args.bench_csv}")
         raise SystemExit(0)
 
     print("AMC BER Simulation - Python Unit Tests")
